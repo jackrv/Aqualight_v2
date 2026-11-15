@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<title>AquaLight — график освещения</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{color-scheme:dark;font:15px system-ui,sans-serif;background:#101b24;color:#e9f1f4}*{box-sizing:border-box}html,body{margin:0;position:fixed;inset:0;overflow:hidden}body{padding:16px;display:flex;justify-content:center}main{width:100%;max-width:760px;display:flex;flex-direction:column;gap:12px;min-height:0}h1{font-size:24px;margin:0}p{margin:0;color:#a9bdc9;font-size:13px}nav{display:flex;gap:6px}button,input{font:inherit;border:1px solid #385365;border-radius:10px;background:#1b303f;color:inherit;padding:10px;min-height:44px}button{cursor:pointer}nav button{flex:1;padding:10px 4px}button[aria-selected=true]{background:#33576c;border-color:var(--channel)}button:disabled{opacity:.4;cursor:default}.chart{flex:1;min-height:150px;max-height:420px;background:#142631;border:1px solid #284554;border-radius:16px;padding:6px}canvas{width:100%;height:100%;display:block;touch-action:none}section{display:flex;gap:8px;align-items:end}label{flex:1;font-size:12px;color:#a9bdc9}input{display:block;width:100%;margin-top:4px;min-width:0}#save{background:#3ed4b5;color:#08241e;font-weight:700;border:0}#notice{min-height:34px;white-space:pre-wrap}small{color:#a9bdc9}footer{padding-bottom:env(safe-area-inset-bottom);display:flex;flex-direction:column;gap:8px}
+</style>
+</head>
+<body><main>
+<header><h1>AquaLight</h1><p>Суточный график · время Киева · 4 канала</p></header>
+<nav role="tablist" aria-label="Каналы"></nav>
+<div class="chart"><canvas aria-label="График яркости. Для точного ввода используйте поля под графиком."></canvas></div>
+<p>Перетаскивайте точки. Нажмите на пустое место, чтобы добавить точку (до 12).</p>
+<section><label>Время<input id="time" type="time" step="60"></label><label>Яркость 0–255<input id="value" type="number" min="0" max="255" step="1"></label><button id="remove">Удалить</button></section>
+<footer><small id="point"></small><button id="save">Сохранить в контроллер</button><p id="notice" role="status"></p></footer>
+</main>
+<script src="schedule.js"></script>
+<script src="app.js"></script>
+</body></html>
