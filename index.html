@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AquaLight 4-Channel Schedule</title>
+    <!-- Telegram WebApp SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: #1e1e1e;
+            --text-color: #ffffff;
+            --accent-color: #228be6;
+            --accent-hover: #1c7ed6;
+        }
+
+        body.tg-theme {
+            --bg-color: var(--tg-theme-bg-color, #121212);
+            --card-bg: var(--tg-theme-secondary-bg-color, #1e1e1e);
+            --text-color: var(--tg-theme-text-color, #ffffff);
+            --accent-color: var(--tg-theme-button-color, #228be6);
+            --accent-hover: var(--tg-theme-button-color, #1c7ed6);
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 12px;
+            width: 100%;
+            height: 100%;
+            overflow: hidden; /* Блокирует прокрутку страницы */
+            position: fixed;  /* Фиксирует корпус приложения на экране */
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 600px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .header {
+            text-align: center;
+        }
+
+        .header h2 {
+            margin: 0 0 2px 0;
+            font-size: 18px;
+        }
+
+        .header p {
+            margin: 0;
+            font-size: 12px;
+            opacity: 0.7;
+        }
+
+        /* Переключатель каналов (Вкладки) */
+        .channel-tabs {
+            display: flex;
+            gap: 6px;
+            width: 100%;
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 10px 4px;
+            border: 2px solid transparent;
+            border-radius: 8px;
+            background: var(--card-bg);
+            color: var(--text-color);
+            font-weight: 600;
+            font-size: 12px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s ease;
+        }
+
+        /* Цветовая индикация вкладок */
+        .tab-btn[data-ch="0"].active { border-color: #e0e0e0; background: #2a2a2a; color: #ffffff; }
+        .tab-btn[data-ch="1"].active { border-color: #ff6b6b; background: #3b1d1d; color: #ff8787; }
+        .tab-btn[data-ch="2"].active { border-color: #51cf66; background: #1b3320; color: #69db7c; }
+        .tab-btn[data-ch="3"].active { border-color: #339af0; background: #162a3b; color: #4dabf7; }
+
+        .canvas-card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        canvas {
+            width: 100%;
+            height: auto;
+            background: #000000;
+            border-radius: 8px;
+            touch-action: none;
+            cursor: pointer;
+        }
+
+        .info-panel {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            margin-top: 8px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .save-btn {
+            width: 100%;
+            padding: 14px;
+            background-color: var(--accent-color);
+            color: #ffffff;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s ease, transform 0.1s ease;
+            box-shadow: 0 2px 8px rgba(34, 139, 230, 0.4);
+        }
+
+        .save-btn:active {
+            transform: scale(0.98);
+            background-color: var(--accent-hover);
+        }
+    </style>
+</head>
+<body class="tg-theme">
+
+<div class="container">
+    <div class="header">
+        <h2>4-Канальный светильник</h2>
+        <p>Выберите канал и настройте суточную суточную кривую</p>
+    </div>
+
+    <!-- Табы каналов -->
+    <div class="channel-tabs">
+        <button class="tab-btn active" data-ch="0" onclick="switchChannel(0)">1: Белый</button>
+        <button class="tab-btn" data-ch="1" onclick="switchChannel(1)">2: Красный</button>
+        <button class="tab-btn" data-ch="2" onclick="switchChannel(2)">3: Зеленый</button>
+        <button class="tab-btn" data-ch="3" onclick="switchChannel(3)">4: Синий</button>
+    </div>
+
+    <div class="canvas-card">
+        <canvas id="scheduleCanvas" width="500" height="260"></canvas>
+        <div class="info-panel">
+            <span id="selectedPointInfo">Точка: выберите точку</span>
+            <span id="totalPointsInfo">Всего точек: 0</span>
+        </div>
+    </div>
+
+    <button class="save-btn" onclick="saveAndSend()">Сохранить суточный график</button>
+</div>
+
+<script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+        tg.expand();
+        // Блокируем свайп закрытия окна в Telegram SDK
+        if (tg.disableVerticalSwipes) {
+            tg.disableVerticalSwipes();
+        }
+        tg.ready();
+    }
+
+    const canvas = document.getElementById('scheduleCanvas');
+    const ctx = canvas.getContext('2d');
+    const infoText = document.getElementById('selectedPointInfo');
+    const totalText = document.getElementById('totalPointsInfo');
+
+    let currentChannel = 0;
+
+    const channelStyles = [
+        { stroke: '#e0e0e0', fill: 'rgba(255, 255, 255, 0.15)', point: '#ffffff' },
+        { stroke: '#ff6b6b', fill: 'rgba(255, 107, 107, 0.20)', point: '#ff8787' },
+        { stroke: '#51cf66', fill: 'rgba(81, 207, 102, 0.20)', point: '#69db7c' },
+        { stroke: '#339af0', fill: 'rgba(51, 154, 240, 0.20)', point: '#4dabf7' }
+    ];
+
+    let scheduleData = {
+        ch0: [ { t: 0, v: 0 }, { t: 420, v: 0 }, { t: 540, v: 230 }, { t: 1140, v: 230 }, { t: 1260, v: 0 }, { t: 1440, v: 0 } ],
+        ch1: [ { t: 0, v: 0 }, { t: 450, v: 0 }, { t: 570, v: 200 }, { t: 1110, v: 200 }, { t: 1230, v: 0 }, { t: 1440, v: 0 } ],
+        ch2: [ { t: 0, v: 0 }, { t: 450, v: 0 }, { t: 570, v: 180 }, { t: 1110, v: 180 }, { t: 1230, v: 0 }, { t: 1440, v: 0 } ],
+        ch3: [ { t: 0, v: 5 }, { t: 360, v: 5 }, { t: 480, v: 150 }, { t: 1200, v: 150 }, { t: 1320, v: 5 }, { t: 1440, v: 5 } ]
+    };
+
+    const PADDING = { top: 20, right: 20, bottom: 30, left: 35 };
+    let draggedIndex = null;
+
+    function getPoints() {
+        return scheduleData[`ch${currentChannel}`];
+    }
+
+    function switchChannel(chIndex) {
+        currentChannel = chIndex;
+        draggedIndex = null;
+        
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.classList.toggle('active', parseInt(btn.dataset.ch) === chIndex);
+        });
+
+        infoText.innerText = 'Точка: выберите точку';
+        draw();
+    }
+
+    function t2x(t) {
+        const drawWidth = canvas.width - PADDING.left - PADDING.right;
+        return PADDING.left + (t / 1440) * drawWidth;
+    }
+
+    function x2t(x) {
+        const drawWidth = canvas.width - PADDING.left - PADDING.right;
+        let t = Math.round(((x - PADDING.left) / drawWidth) * 1440);
+        return Math.max(0, Math.min(1440, t));
+    }
+
+    function v2y(v) {
+        const drawHeight = canvas.height - PADDING.top - PADDING.bottom;
+        return (canvas.height - PADDING.bottom) - (v / 255) * drawHeight;
+    }
+
+    function y2v(y) {
+        const drawHeight = canvas.height - PADDING.top - PADDING.bottom;
+        let v = Math.round(((canvas.height - PADDING.bottom - y) / drawHeight) * 255);
+        return Math.max(0, Math.min(255, v));
+    }
+
+    function formatTime(minutes) {
+        let h = Math.floor(minutes / 60);
+        let m = minutes % 60;
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        ctx.strokeStyle = '#252525';
+        ctx.fillStyle = '#666666';
+        ctx.font = '10px sans-serif';
+        ctx.lineWidth = 1;
+
+        for (let h = 0; h <= 24; h += 4) {
+            let x = t2x(h * 60);
+            ctx.beginPath();
+            ctx.moveTo(x, PADDING.top);
+            ctx.lineTo(x, canvas.height - PADDING.bottom);
+            ctx.stroke();
+            ctx.fillText(`${h}:00`, x - 10, canvas.height - 10);
+        }
+
+        [0, 128, 255].forEach(v => {
+            let y = v2y(v);
+            ctx.beginPath();
+            ctx.moveTo(PADDING.left, y);
+            ctx.lineTo(canvas.width - PADDING.right, y);
+            ctx.stroke();
+            let percent = Math.round((v / 255) * 100);
+            ctx.fillText(`${percent}%`, 5, y + 3);
+        });
+
+        for (let ch = 0; ch < 4; ch++) {
+            if (ch === currentChannel) continue;
+            let pList = scheduleData[`ch${ch}`];
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+            ctx.lineWidth = 1;
+            pList.forEach((p, i) => {
+                let x = t2x(p.t), y = v2y(p.v);
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+        }
+
+        const points = getPoints();
+        const style = channelStyles[currentChannel];
+
+        ctx.beginPath();
+        ctx.moveTo(t2x(points[0].t), v2y(0));
+        points.forEach(p => ctx.lineTo(t2x(p.t), v2y(p.v)));
+        ctx.lineTo(t2x(points[points.length - 1].t), v2y(0));
+        ctx.closePath();
+        ctx.fillStyle = style.fill;
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.strokeStyle = style.stroke;
+        ctx.lineWidth = 3;
+        points.forEach((p, i) => {
+            let x = t2x(p.t), y = v2y(p.v);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+
+        points.forEach((p, i) => {
+            let x = t2x(p.t), y = v2y(p.v);
+            ctx.beginPath();
+            ctx.arc(x, y, 7, 0, Math.PI * 2);
+            ctx.fillStyle = (draggedIndex === i) ? '#ff922b' : style.point;
+            ctx.fill();
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        });
+
+        totalText.innerText = `Точек в CH${currentChannel + 1}: ${points.length}`;
+    }
+
+    function getCanvasCoords(e) {
+        const rect = canvas.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        return {
+            x: (clientX - rect.left) * (canvas.width / rect.width),
+            y: (clientY - rect.top) * (canvas.height / rect.height)
+        };
+    }
+
+    // Жесткий запрет перехвата жеста браузером/Telegram
+    canvas.addEventListener('touchstart', (e) => { e.preventDefault(); }, { passive: false });
+    canvas.addEventListener('touchmove', (e) => { e.preventDefault(); }, { passive: false });
+
+    canvas.addEventListener('pointerdown', (e) => {
+        const { x, y } = getCanvasCoords(e);
+        const points = getPoints();
+
+        draggedIndex = points.findIndex(p => Math.hypot(t2x(p.t) - x, v2y(p.v) - y) < 18);
+
+        if (draggedIndex !== -1) {
+            updateInfoText(points[draggedIndex]);
+            draw();
+        }
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+        if (draggedIndex === null) return;
+        const { x, y } = getCanvasCoords(e);
+        const points = getPoints();
+
+        points[draggedIndex].v = y2v(y);
+
+        if (draggedIndex > 0 && draggedIndex < points.length - 1) {
+            let minT = points[draggedIndex - 1].t + 5;
+            let maxT = points[draggedIndex + 1].t - 5;
+            let newT = x2t(x);
+            points[draggedIndex].t = Math.max(minT, Math.min(maxT, newT));
+        }
+
+        updateInfoText(points[draggedIndex]);
+        draw();
+    });
+
+    window.addEventListener('pointerup', () => {
+        draggedIndex = null;
+        draw();
+    });
+
+    function updateInfoText(point) {
+        if (!point) return;
+        let percent = Math.round((point.v / 255) * 100);
+        infoText.innerText = `Время: ${formatTime(point.t)} | Яркость: ${percent}%`;
+    }
+
+    function saveAndSend() {
+        const jsonString = JSON.stringify(scheduleData);
+
+        if (tg && tg.sendData) {
+            try {
+                tg.sendData(jsonString);
+                tg.close();
+            } catch (e) {
+                console.log("tg.sendData failed", e);
+            }
+        } else {
+            alert("Сформированный JSON:\n" + jsonString);
+        }
+    }
+
+    draw();
+</script>
+
+</body>
+</html>
