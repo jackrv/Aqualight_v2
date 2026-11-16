@@ -1299,9 +1299,9 @@ void setup() {
     settimeofday_cb(BoolCB([](bool fromSntp) { if (fromSntp) ntpSynced = true; }));
     configTime(TIMEZONE, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
     restoreClock();
-    // A timer, not loop(): the light keeps following the schedule while a long
-    // poll or an OTA download blocks the main loop.
-    os_timer_setfn(&lightTimer, [](void*) { updateLight(); }, nullptr);
+    // A timer, not loop(): the light keeps following the schedule and the clock
+    // backup stays fresh while a long poll or an OTA download blocks the main loop.
+    os_timer_setfn(&lightTimer, [](void*) { updateLight(); saveClock(); }, nullptr);
     os_timer_arm(&lightTimer, 250, true);
     logLine(PSTR("[Heap] boot free=%u, largest block=%u\n"),
         ESP.getFreeHeap(), ESP.getMaxFreeBlockSize());
@@ -1311,7 +1311,6 @@ void setup() {
 void loop() {
     trackUptime();
     logConnectivity();
-    saveClock();
     serviceWaterSensor();
     serviceWifiPortal();
     if (WiFi.status() == WL_CONNECTED && clockReady()) reportOtaBoot();
