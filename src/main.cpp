@@ -21,6 +21,7 @@
 #include "recovery.h"
 #include "default_schedule.h"
 #include "access.h"
+#include "sent_messages.h"
 
 // Optional in secrets.h: Telegram IDs of additional users, e.g. "111111,222222".
 #ifndef TELEGRAM_EXTRA_USERS
@@ -51,6 +52,7 @@ os_timer_t lightTimer;
 constexpr uint32_t SAVED_CLOCK_RTC_OFFSET = 64;
 constexpr char SETUP_AP_NAME[] = "AquaLight-Setup";
 String wifiSsid, wifiPass;
+SentMessages sentMessages;
 char extraUsers[MAX_EXTRA_USERS][TELEGRAM_ID_SIZE];
 uint8_t extraUserCount = 0;
 GyverDS18Single waterSensor(WATER_TEMP_PIN);
@@ -627,6 +629,39 @@ void deleteChatMessage(int32_t messageId, const char* chat = TELEGRAM_OWNER_ID) 
         logLine(PSTR("[Telegram] Could not delete message %ld"), static_cast<long>(messageId));
 }
 
+// The table survives restarts, otherwise every reboot would leave one stale
+// message of each kind behind.
+void loadSentMessages() {
+    File file = LittleFS.open("/sent.bin", "r");
+    SentMessages stored;
+    if (!file || file.size() != sizeof(stored) ||
+        file.read(reinterpret_cast<uint8_t*>(&stored), sizeof(stored)) != sizeof(stored) ||
+        !sentMessagesValid(stored)) return;
+    sentMessages = stored;
+}
+
+void saveSentMessages() {
+    if (!fsReady) return;
+    File file = LittleFS.open("/sent.tmp", "w");
+    if (!file) return;
+    size_t written = file.write(reinterpret_cast<const uint8_t*>(&sentMessages), sizeof(sentMessages));
+    file.flush(); file.close();
+    if (written == sizeof(sentMessages)) LittleFS.rename("/sent.tmp", "/sent.bin");
+}
+
+// Send a message and remove the previous one of the same kind from that chat.
+// The new message goes first, so the chat is never left without it.
+bool sendUnique(const String& text, bool editor = false, const char* chat = TELEGRAM_OWNER_ID,
+                int8_t kind = -1) {
+    int32_t id = 0;
+    if (!sendMessage(text, editor, &id, chat)) return false;
+    if (kind < 0) kind = editor ? KIND_BUTTON : KIND_NOTICE;
+    int32_t previous = rememberSent(sentMessages, chat, kind, id);
+    saveSentMessages();
+    if (previous) deleteChatMessage(previous, chat);
+    return true;
+}
+
 void greetOnBoot() {
     static bool attempted = false;
     static uint32_t lastAttempt = 0;
@@ -643,7 +678,7 @@ void greetOnBoot() {
     else if (scheduleFromFirmware) text += F("\n💡 На плате не было графика — записан стартовый из прошивки. Освещение работает по нему.");
     else text += F("\n💡 График загружен. Освещение работает по расписанию.");
     text += F("\n\nОткройте редактор кнопкой ниже.\n/status — состояние контроллера\n/update — обновить прошивку");
-    bootAnnounced = sendMessage(text, true);
+    bootAnnounced = sendUnique(text, true);
     if (bootAnnounced) logLine(PSTR("[Telegram] Boot greeting delivered"));
 }
 
@@ -724,7 +759,7 @@ void reportOtaBoot() {
     text += F("\n\n/status — состояние · /update — обновление");
     // The result is a new message with a fresh editor button. Only once it has
     // been delivered is the firmware message (file and progress) removed.
-    if (!sendMessage(text, true)) return;
+    if (!sendUnique(text, true)) return;
     logLine(PSTR("[OTA] Boot result delivered: %s"), matches ? "updated" : "MD5 mismatch");
     if (otaMessageId) deleteChatMessage(otaMessageId);
     LittleFS.remove("/ota-result.json");
@@ -737,7 +772,7 @@ void reportOtaBoot() {
 
 void queueFirmware(JsonObjectConst message, bool fromButton = false) {
     if (!otaWindow.active(millis())) {
-        sendMessage(F("Для обновления сначала отправьте /update, затем firmware.bin с подписью md5:… в течение 5 минут."));
+        sendUnique(F("Для обновления сначала отправьте /update, затем firmware.bin с подписью md5:… в течение 5 минут."));
         return;
     }
     String filename = message["document"]["file_name"] | "";
@@ -750,7 +785,7 @@ void queueFirmware(JsonObjectConst message, bool fromButton = false) {
         !parseFirmwareMd5(message["caption"] | "", md5)) {
         String error = String(F("❌ Нужен .bin для AquaLight D1 mini с подписью md5:32_шестнадцатеричных_символа. Размер 4096…")) + String(otaCapacity()) + " байт. Отправьте файл заново.";
         if (fromButton) otaStatus(error);
-        else sendMessage(error);
+        else sendUnique(error);
         return;
     }
     if (!fromButton) {
@@ -793,7 +828,7 @@ void handleFirmwareButton(JsonObjectConst query) {
     delay(1);
     if (!authorized) {
         if (query["from"]["id"].as<String>() == owner)
-            sendMessage(F("❌ Не удалось проверить кнопку или файл. Соберите и отправьте прошивку из VS Code заново."));
+            sendUnique(F("❌ Не удалось проверить кнопку или файл. Соберите и отправьте прошивку из VS Code заново."));
         return;
     }
     logLine(PSTR("[OTA] Install button accepted"));
@@ -1071,9 +1106,9 @@ void registerCommands(const char* chat, bool owner) {
 // travels inside the button's URL, so their old button would open stale data.
 void refreshOtherEditors(const String& author) {
     const __FlashStringHelper* note = F("✏️ График освещения изменён другим пользователем. Кнопка редактора обновлена.");
-    if (!isOwner(author)) sendMessage(note, true);
+    if (!isOwner(author)) sendUnique(note, true);
     for (uint8_t i = 0; i < extraUserCount; ++i)
-        if (author != extraUsers[i]) sendMessage(note, true, nullptr, extraUsers[i]);
+        if (author != extraUsers[i]) sendUnique(note, true, extraUsers[i]);
 }
 
 void handleMessage(JsonObjectConst message) {
@@ -1083,21 +1118,23 @@ void handleMessage(JsonObjectConst message) {
     if (message["chat"]["type"] != "private" || message["chat"]["id"].as<String>() != sender ||
         !(owner || isExtraUser(sender))) return;
     const char* chat = sender.c_str();
-    auto reply = [chat](const String& text, bool editor = false) {
-        return sendMessage(text, editor, nullptr, chat);
+    auto reply = [chat](const String& text, bool editor = false, int8_t kind = -1) {
+        return sendUnique(text, editor, chat, kind);
     };
     const char* data = message["web_app_data"]["data"];
     String text = message["text"] | "";
+    // A command is removed from the chat once its answer has been delivered.
+    bool answered = false;
     const bool firmware = text == "/update" || text == "/cancel" || message["document"].is<JsonObjectConst>();
     if (firmware && !owner) {
-        reply(F("Обновление прошивки доступно только владельцу."));
+        answered = reply(F("Обновление прошивки доступно только владельцу."));
     } else if (text == "/update") {
         otaWindow.arm(millis());
-        sendMessage(String(F("Обновление разрешено на 5 минут. Отправьте firmware.bin как документ с подписью md5:… из файла firmware.bin.md5. Отправка запускает установку и перезагрузку. /cancel — отмена. Доступно OTA: ")) + String(otaCapacity()) + " байт.");
+        answered = sendUnique(String(F("Обновление разрешено на 5 минут. Отправьте firmware.bin как документ с подписью md5:… из файла firmware.bin.md5. Отправка запускает установку и перезагрузку. /cancel — отмена. Доступно OTA: ")) + String(otaCapacity()) + " байт.");
     } else if (text == "/cancel") {
         otaWindow.cancel();
         pendingFirmware.fileId = "";
-        sendMessage(F("Ожидание прошивки отменено."));
+        answered = sendUnique(F("Ожидание прошивки отменено."));
     } else if (message["document"].is<JsonObjectConst>()) {
         queueFirmware(message);
     } else if (data || text.startsWith("{")) {
@@ -1119,11 +1156,9 @@ void handleMessage(JsonObjectConst message) {
             refreshOtherEditors(sender);
         }
     } else if (text == "/status") {
-        // Delete only the sender's incoming command, after the status is delivered.
-        if (reply(controllerStatus()))
-            deleteChatMessage(message["message_id"] | int32_t(0), chat);
+        answered = reply(controllerStatus(), false, KIND_STATUS);
     } else if (text == "/schedule") {
-        reply(scheduleJson(schedule));
+        answered = reply(scheduleJson(schedule), false, KIND_SCHEDULE);
     } else if (text == "/start" || text.startsWith("/start ")) {
         // First contact: a welcome with the current state, the editor button and
         // this account's command menu next to the message field.
@@ -1134,12 +1169,16 @@ void handleMessage(JsonObjectConst message) {
         welcome += F("\n\nКнопка «Редактор освещения» под полем ввода открывает график.\n"
             "/status — состояние контроллера\n/editor — обновить кнопку редактора\n/schedule — график в JSON");
         if (owner) welcome += F("\n/update — обновить прошивку");
-        if (reply(welcome, true)) registerCommands(chat, owner);
+        answered = reply(welcome, true);
+        if (answered) registerCommands(chat, owner);
     } else if (text == "/editor") {
-        reply(F("💡 Кнопка редактора обновлена — в ней текущий график."), true);
+        answered = reply(F("💡 Кнопка редактора обновлена — в ней текущий график."), true);
     } else {
-        reply(F("Не знаю такой команды. /start покажет, что я умею."));
+        answered = reply(F("Не знаю такой команды. /start покажет, что я умею."));
     }
+    // Only the sender's own command line; schedules, files and plain text stay.
+    if (answered && text.startsWith("/"))
+        deleteChatMessage(message["message_id"] | int32_t(0), chat);
 }
 
 void pollBot() {
@@ -1359,6 +1398,7 @@ void setup() {
         loadOtaReceipt();
         loadCallbackCheckpoint();
         loadWifiConfig();
+        loadSentMessages();
     } else {
         // Nothing can be saved, but the aquarium should not stay dark.
         scheduleLoaded = scheduleFromFirmware = defaultSchedule(schedule);
