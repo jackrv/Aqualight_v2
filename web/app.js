@@ -10,7 +10,7 @@ const initial=new URLSearchParams(location.search).get('data');
 if(initial) {
   try{data=Schedule.validate(JSON.parse(initial));}
   catch(e){valid=false;$('notice').textContent='Ошибка входного графика: '+e.message;$('save').disabled=true;}
-} else $('notice').textContent='Демонстрационный график. Для загрузки текущего откройте /editor в боте.';
+} else $('notice').textContent='Открыт основной пресет. Для загрузки текущего графика откройте /editor в боте.';
 const points=()=>data['ch'+channel];
 const nav=document.querySelector('nav');
 names.forEach((name,c)=>{
@@ -19,11 +19,11 @@ names.forEach((name,c)=>{
 });
 function geometry(){const r=canvas.getBoundingClientRect();return {w:r.width,h:r.height,l:37,r:r.width-23,t:18,b:r.height-28};}
 function xy(p,g){return [g.l+p.t/1440*(g.r-g.l),g.b-p.v/255*(g.b-g.t)];}
-// Segments are drawn with the same cosine easing the controller applies.
+// Segments are drawn with the same smooth curve the controller follows.
 function curve(a,g){
  a.forEach((p,i)=>{
    if(!i){ctx.moveTo(...xy(p,g));return;}
-   const q=a[i-1],steps=q.v===p.v?1:Math.max(2,Math.ceil((xy(p,g)[0]-xy(q,g)[0])/3));
+   const q=a[i-1],steps=q.v===p.v?1:Math.max(12,Math.ceil((xy(p,g)[0]-xy(q,g)[0])/2));
    for(let k=1;k<=steps;k++){const t=q.t+(p.t-q.t)*k/steps;ctx.lineTo(...xy({t,v:Schedule.valueAt(a,t)},g));}
  });
 }
@@ -82,4 +82,87 @@ $('save').onclick=async()=>{
    else{await navigator.clipboard.writeText(json);$('notice').textContent='JSON скопирован. Отправьте его боту сообщением.';}
  }catch(e){$('notice').textContent=e.message;}
 };
-new ResizeObserver(draw).observe(canvas);sync();
+
+// ---- Presets -------------------------------------------------------------
+// Built-in presets come from presets.js. The owner's presets and the choice of
+// the default one live in Telegram CloudStorage (shared by all devices) or, when
+// it is unavailable, in this browser's localStorage.
+const clone=value=>JSON.parse(JSON.stringify(value));
+const store=(()=>{
+ let cloud=!!(tg?.isVersionAtLeast?.('6.9')&&tg.CloudStorage&&tg.platform!=='unknown');
+ const ask=(method,...args)=>new Promise((resolve,reject)=>{
+   const timer=setTimeout(()=>reject(Error('timeout')),2500);
+   try{tg.CloudStorage[method](...args,(error,value)=>{clearTimeout(timer);error?reject(Error(error)):resolve(value);});}
+   catch(e){clearTimeout(timer);reject(e);}
+ });
+ const local={get:k=>{try{return localStorage.getItem(k);}catch(e){return null;}},
+   set:(k,v)=>localStorage.setItem(k,v),remove:k=>{try{localStorage.removeItem(k);}catch(e){}}};
+ // One failure switches to localStorage for the rest of the session.
+ const via=async(method,fallback,...args)=>{
+   if(cloud){try{return await ask(method,...args);}catch(e){cloud=false;}}
+   return fallback(...args);
+ };
+ return {get:k=>via('getItem',local.get,k).then(v=>v||null),set:(k,v)=>via('setItem',local.set,k,v),remove:k=>via('removeItem',local.remove,k)};
+})();
+let userPresets=[],defaultPreset=Presets.defaultId;
+const allPresets=()=>Presets.builtin.concat(userPresets);
+const findPreset=id=>allPresets().find(p=>p.id===id);
+const say=text=>{$('notice').textContent=text;};
+function listPresets(current){
+ const list=$('preset');list.textContent='';
+ const add=(value,text)=>{const o=document.createElement('option');o.value=value;o.textContent=text;list.append(o);};
+ add('','— график контроллера —');
+ for(const p of allPresets()) add(p.id,(p.id===defaultPreset?'★ ':'')+p.name);
+ list.value=current&&findPreset(current)?current:'';
+ $('drop').disabled=!userPresets.some(p=>p.id===list.value);
+ $('star').disabled=!list.value||list.value===defaultPreset;
+}
+const saveIndex=()=>store.set('presets',JSON.stringify({default:defaultPreset,list:userPresets.map(p=>({id:p.id,name:p.name}))}));
+function usePreset(id){
+ const p=findPreset(id);if(!p)return false;
+ data=clone(p.data);selected=0;valid=true;$('save').disabled=false;sync();return true;
+}
+async function loadPresets(){
+ try{
+   const index=JSON.parse(await store.get('presets')||'{}');
+   for(const item of (Array.isArray(index.list)?index.list:[]).slice(0,Presets.MAX_USER)){
+     const name=Presets.cleanName(item?.name);
+     if(!name||!/^u[a-z0-9]{1,20}$/.test(item.id))continue;
+     try{userPresets.push({id:item.id,name,data:Schedule.validate(JSON.parse(await store.get('p_'+item.id)))});}catch(e){}
+   }
+   if(findPreset(index.default))defaultPreset=index.default;
+ }catch(e){}
+ // Without a schedule from the controller the editor opens the default preset.
+ const opened=!initial&&usePreset(defaultPreset)?defaultPreset:'';
+ listPresets(opened);
+}
+$('preset').onchange=()=>{
+ const id=$('preset').value;
+ if(id&&usePreset(id))say(`Загружен пресет «${findPreset(id).name}». Чтобы применить, нажмите «Сохранить в контроллер».`);
+ listPresets(id);
+};
+$('star').onclick=async()=>{
+ const id=$('preset').value;if(!findPreset(id))return;
+ defaultPreset=id;listPresets(id);
+ try{await saveIndex();say(`«${findPreset(id).name}» — теперь основной пресет.`);}catch(e){say('Не удалось сохранить выбор основного пресета.');}
+};
+$('add').onclick=()=>{$('naming').hidden=!$('naming').hidden;if(!$('naming').hidden)$('name').focus();};
+$('keep').onclick=async()=>{
+ const name=Presets.cleanName($('name').value);
+ if(!name){say('Введите название до 24 символов.');return;}
+ if(userPresets.length>=Presets.MAX_USER){say(`Можно хранить до ${Presets.MAX_USER} своих пресетов. Удалите лишний.`);return;}
+ try{
+   const preset={id:'u'+Date.now().toString(36),name,data:clone(Schedule.validate(data))};
+   await store.set('p_'+preset.id,JSON.stringify(preset.data));
+   userPresets.push(preset);await saveIndex();
+   $('name').value='';$('naming').hidden=true;listPresets(preset.id);say(`Пресет «${name}» сохранён.`);
+ }catch(e){say('Не удалось сохранить пресет: '+e.message);}
+};
+$('drop').onclick=async()=>{
+ const id=$('preset').value,preset=userPresets.find(p=>p.id===id);if(!preset)return;
+ userPresets=userPresets.filter(p=>p.id!==id);
+ if(defaultPreset===id)defaultPreset=Presets.defaultId;
+ listPresets('');
+ try{await saveIndex();await store.remove('p_'+id);say(`Пресет «${preset.name}» удалён.`);}catch(e){say('Не удалось удалить пресет из хранилища.');}
+};
+new ResizeObserver(draw).observe(canvas);sync();listPresets('');loadPresets();

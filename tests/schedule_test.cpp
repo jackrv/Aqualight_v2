@@ -29,19 +29,37 @@ int main() {
     assert(trend(candidate.channels[0],3600)==-1);
     assert(trend(candidate.channels[0],7200)==0);
     assert(trend(candidate.channels[0],86399)==0);
-    // Cosine easing: exact at the points and the middle, slow near both ends.
+    // Smooth curve: exact at the points and the middle, slow near a plateau or a peak.
     assert(interpolateFine(candidate.channels[0],0)==0);
     assert(interpolateFine(candidate.channels[0],1800)==120*FINE_STEPS);
     assert(interpolateFine(candidate.channels[0],3600)==240*FINE_STEPS);
-    assert(interpolate(candidate.channels[0],900)==35);    // a quarter of the way: 14.6%, not 25%
-    assert(interpolate(candidate.channels[0],2700)==205);  // three quarters: 85.4%
-    assert(interpolate(candidate.channels[0],4500)==205);  // mirrored on the way down
-    assert(interpolateFine(candidate.channels[0],60)<interpolateFine(candidate.channels[0],120));
+    assert(interpolate(candidate.channels[0],840)>=31 && interpolate(candidate.channels[0],840)<=35);    // 23% of the way: ~14%
+    assert(interpolate(candidate.channels[0],2760)>=205 && interpolate(candidate.channels[0],2760)<=209);
+    assert(interpolateFine(candidate.channels[0],4440)==interpolateFine(candidate.channels[0],2760));    // mirrored on the way down
     for (uint32_t second=1; second<=3600; ++second)
         assert(interpolateFine(candidate.channels[0],second)>=interpolateFine(candidate.channels[0],second-1));
     for (uint32_t second=3601; second<=7200; ++second)
         assert(interpolateFine(candidate.channels[0],second)<=interpolateFine(candidate.channels[0],second-1));
     assert(interpolateFine(candidate.channels[0],50000)==0);  // flat segment stays flat
+    {
+        // A point on a continuing rise is passed without stopping or overshooting;
+        // the peak that follows is rounded.
+        Channel rise; rise.count=5;
+        rise.points[0]={0,0}; rise.points[1]={60,100}; rise.points[2]={120,200}; rise.points[3]={180,0}; rise.points[4]={1440,0};
+        assert(interpolateFine(rise,3600)==100*FINE_STEPS && interpolateFine(rise,7200)==200*FINE_STEPS);
+        int through=interpolateFine(rise,3660)-interpolateFine(rise,3540);   // two minutes around the point
+        assert(through>150 && through<280);                                   // a straight line would give 213
+        int atPeak=interpolateFine(rise,7200)-interpolateFine(rise,7140);     // last minute before the peak
+        assert(atPeak>=0 && atPeak<20);
+        for (uint32_t second=1; second<=7200; ++second) {
+            assert(interpolateFine(rise,second)>=interpolateFine(rise,second-1));
+            assert(interpolateFine(rise,second)<=200*FINE_STEPS);
+        }
+        // Midnight is an ordinary point: the curve crosses it without a corner.
+        Channel night; night.count=4;
+        night.points[0]={0,100}; night.points[1]={360,0}; night.points[2]={1080,200}; night.points[3]={1440,100};
+        assert(pointTangent(night,0)<0 && pointTangent(night,0)==pointTangent(night,3));
+    }
     assert(gammaDuty(0)==0);
     assert(gammaDuty(1)==1);
     assert(gammaDuty(FINE_MAX)==PWM_RANGE);

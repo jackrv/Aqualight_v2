@@ -51,11 +51,27 @@ constexpr uint16_t FINE_STEPS = 64;
 constexpr uint16_t FINE_MAX = 255 * FINE_STEPS;
 constexpr uint16_t PWM_RANGE = 1023;
 
-// Cosine ease-in-out: a transition starts and ends with zero speed, so the
-// brightness has no corners at the schedule points. The web editor draws the
-// same curve (web/schedule.js).
-inline float easeInOut(float progress) {
-    return (1.0f - cosf(progress * 3.14159265f)) * 0.5f;
+// The curve through the points is a monotone cubic spline (PCHIP): it passes
+// exactly through every point, never overshoots, has no corners, and does not
+// stop at a point that lies on a continuing rise or fall. It levels off only
+// where the direction changes or a plateau begins. The day wraps around, so
+// midnight is as smooth as any other point. web/schedule.js draws the same curve.
+inline float segmentSlope(const Channel& ch, uint8_t k) {
+    return (float(ch.points[k + 1].v) - float(ch.points[k].v)) /
+        float(ch.points[k + 1].t - ch.points[k].t);
+}
+
+// Slope of the curve at point k, in schedule units per minute.
+inline float pointTangent(const Channel& ch, uint8_t k) {
+    const uint8_t last = ch.count - 1;              // points[0] and points[last] are both midnight
+    const uint8_t before = k == 0 ? last - 1 : k - 1;   // segment that ends at the point
+    const uint8_t after = k == last ? 0 : k;            // segment that starts at it
+    const float d0 = segmentSlope(ch, before), d1 = segmentSlope(ch, after);
+    if (d0 * d1 <= 0) return 0;
+    const float h0 = ch.points[before + 1].t - ch.points[before].t;
+    const float h1 = ch.points[after + 1].t - ch.points[after].t;
+    const float w1 = 2 * h1 + h0, w2 = h1 + 2 * h0;
+    return (w1 + w2) / (w1 / d0 + w2 / d1);
 }
 
 inline uint16_t interpolateFine(const Channel& ch, uint32_t second) {
@@ -64,9 +80,15 @@ inline uint16_t interpolateFine(const Channel& ch, uint32_t second) {
         const Point& b = ch.points[i];
         if (second <= uint32_t(b.t) * 60) {
             if (a.v == b.v) return uint16_t(a.v) * FINE_STEPS;
-            float progress = float(second - a.t * 60UL) / float((b.t - a.t) * 60UL);
-            float value = (a.v + (int(b.v) - int(a.v)) * easeInOut(progress)) * FINE_STEPS;
-            return static_cast<uint16_t>(value + 0.5f);
+            const float h = b.t - a.t;
+            const float p = float(second - a.t * 60UL) / (h * 60.0f);
+            const float p2 = p * p, p3 = p2 * p;
+            float value = (2 * p3 - 3 * p2 + 1) * a.v + (p3 - 2 * p2 + p) * h * pointTangent(ch, i - 1) +
+                (3 * p2 - 2 * p3) * b.v + (p3 - p2) * h * pointTangent(ch, i);
+            const float low = a.v < b.v ? a.v : b.v, high = a.v < b.v ? b.v : a.v;
+            if (value < low) value = low;
+            if (value > high) value = high;
+            return static_cast<uint16_t>(value * FINE_STEPS + 0.5f);
         }
     }
     return 0;
