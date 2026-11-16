@@ -37,12 +37,13 @@
       ch([h(9,30),0],[h(11),150],[h(17),150],[h(18,30),0]),
       ch([h(10),0],[h(11,30),90],[h(16,30),90],[h(18),0]),
       ch([h(10),0],[h(11,30),110],[h(16,30),110],[h(18),0]))},
-    // The owner's schedule from the previous aquarium firmware, converted for gamma.
-    {id:'legacy',name:'Прежний график',data:schedule(
-      ch([h(7),0],[h(9),186],[h(11),230],[h(12),202],[h(18),90],[h(19),0]),
-      ch([h(6),0],[h(8,59),228],[h(9),255],[h(11),255],[h(11,1),122],[h(13),0]),
-      ch([h(18),0],[h(20),167],[h(22),167]),
-      ch([h(6),0],[h(9),255],[h(11),255],[h(11,1),122],[h(13),0],[h(18),0],[h(20),228],[h(22),228],[h(22,1),255]))},
+    // The owner's own routine, smoothed: lit by 07:00 before leaving for work, an
+    // even day for the plants, then a blue glow in the dark until midnight.
+    {id:'mine',name:'Утро и синяя ночь',data:schedule(
+      ch([h(6),0],[h(7),180],[h(8,30),240],[h(16,30),240],[h(18,30),0]),
+      ch([h(5,45),0],[h(7),200],[h(8,30),220],[h(17),220],[h(19),0]),
+      ch([h(6),0],[h(7),120],[h(8,30),160],[h(16,30),160],[h(18,30),30],[h(23),30]),
+      ch([h(6),0],[h(7),150],[h(8,30),200],[h(16,30),200],[h(18,30),120],[h(23),120]))},
   ];
   const defaultId='plants';   // the default until the owner picks another one
   const MAX_USER=12, MAX_NAME=24;
