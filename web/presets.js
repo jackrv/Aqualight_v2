@@ -37,6 +37,12 @@
       ch([h(9,30),0],[h(11),150],[h(17),150],[h(18,30),0]),
       ch([h(10),0],[h(11,30),90],[h(16,30),90],[h(18),0]),
       ch([h(10),0],[h(11,30),110],[h(16,30),110],[h(18),0]))},
+    // The owner's schedule from the previous aquarium firmware, converted for gamma.
+    {id:'legacy',name:'Прежний график',data:schedule(
+      ch([h(7),0],[h(9),186],[h(11),230],[h(12),202],[h(18),90],[h(19),0]),
+      ch([h(6),0],[h(8,59),228],[h(9),255],[h(11),255],[h(11,1),122],[h(13),0]),
+      ch([h(18),0],[h(20),167],[h(22),167]),
+      ch([h(6),0],[h(9),255],[h(11),255],[h(11,1),122],[h(13),0],[h(18),0],[h(20),228],[h(22),228],[h(22,1),255]))},
   ];
   const defaultId='plants';   // the default until the owner picks another one
   const MAX_USER=12, MAX_NAME=24;
