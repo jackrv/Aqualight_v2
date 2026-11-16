@@ -37,4 +37,10 @@ for(const p of Presets.builtin){
 const main=Presets.builtin.find(p=>p.id===Presets.defaultId);assert.ok(main);
 assert.deepEqual(main.data,JSON.parse(fs.readFileSync(path.join(__dirname,'../data/schedule.json'),'utf8')));
 assert.equal(Presets.cleanName('  Мой   свет '),'Мой свет');assert.equal(Presets.cleanName(''),'');assert.equal(Presets.cleanName('x'.repeat(25)),'');
-console.log('Web validation, smooth curve, presets and URL round-trip: PASS');
+// The page addresses its scripts by content hash (scripts/stamp_web.py).
+const hash=require('node:crypto').createHash('sha256');
+for(const name of ['schedule.js','presets.js','app.js'])hash.update(fs.readFileSync(path.join(__dirname,'../web',name)));
+const stamp=hash.digest('hex').slice(0,8),page=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8');
+for(const name of ['schedule.js','presets.js','app.js'])
+  assert.ok(page.includes(`src="${name}?v=${stamp}"`),`web/index.html is stale: run python3 scripts/stamp_web.py (${name})`);
+console.log('Web validation, smooth curve, presets, script stamps and URL round-trip: PASS');
