@@ -12,6 +12,8 @@ if(initial) {
   catch(e){valid=false;$('notice').textContent='Ошибка входного графика: '+e.message;$('save').disabled=true;}
 } else $('notice').textContent='Открыт основной пресет. Для загрузки текущего графика откройте /editor в боте.';
 const points=()=>data['ch'+channel];
+// The controller stores 0…255; the editor shows whole percent.
+const percent=v=>Math.round(v/2.55);
 const nav=document.querySelector('nav');
 names.forEach((name,c)=>{
   const b=document.createElement('button');b.textContent=name;b.setAttribute('role','tab');b.style.setProperty('--channel',colors[c]);
@@ -31,7 +33,7 @@ function draw(){
  const g=geometry(),dpr=window.devicePixelRatio||1;
  canvas.width=Math.round(g.w*dpr);canvas.height=Math.round(g.h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,g.w,g.h);
  ctx.font='11px system-ui';ctx.lineWidth=1;
- for(let v=0;v<=255;v+=51){const y=xy({t:0,v},g)[1];ctx.strokeStyle='#28424f';ctx.beginPath();ctx.moveTo(g.l,y);ctx.lineTo(g.r,y);ctx.stroke();ctx.fillStyle='#9eb5c2';ctx.fillText(v,5,y+4);}
+ for(let v=0;v<=255;v+=51){const y=xy({t:0,v},g)[1];ctx.strokeStyle='#28424f';ctx.beginPath();ctx.moveTo(g.l,y);ctx.lineTo(g.r,y);ctx.stroke();ctx.fillStyle='#9eb5c2';ctx.fillText(percent(v)+'%',5,y+4);}
  for(let hour=0;hour<=24;hour+=6){const x=xy({t:hour*60,v:0},g)[0];ctx.fillStyle='#9eb5c2';ctx.fillText(String(hour).padStart(2,'0')+':00',x-14,g.h-8);}
  for(const c of [0,1,2,3].filter(c=>c!==channel).concat(channel)){
    ctx.globalAlpha=c===channel?1:.23;ctx.strokeStyle=colors[c];ctx.lineWidth=c===channel?2.5:1.5;ctx.beginPath();
@@ -43,7 +45,7 @@ function draw(){
 function sync(){
  const p=points()[selected],edge=selected===0||selected===points().length-1;
  $('time').value=p.t===1440?'00:00':String(Math.floor(p.t/60)).padStart(2,'0')+':'+String(p.t%60).padStart(2,'0');
- $('time').disabled=edge;$('value').value=p.v;$('remove').disabled=edge;
+ $('time').disabled=edge;$('value').value=percent(p.v);$('remove').disabled=edge;
  $('point').textContent=`Точка ${selected+1} из ${points().length}${p.t===1440?' · 24:00 (конец суток)':''}`;
  [...nav.children].forEach((b,i)=>b.setAttribute('aria-selected',String(i===channel)));draw();
 }
@@ -72,7 +74,7 @@ canvas.onpointerup=canvas.onpointercancel=()=>{drag=false;};
 canvas.addEventListener('touchstart',e=>e.preventDefault(),{passive:false});
 canvas.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
 $('time').onchange=()=>{const [h,m]=$('time').value.split(':').map(Number);if(Number.isFinite(h)&&Number.isFinite(m))change(h*60+m,points()[selected].v);};
-$('value').onchange=()=>{if($('value').value!==''&&Number.isFinite(Number($('value').value)))change(points()[selected].t,Number($('value').value));};
+$('value').onchange=()=>{if($('value').value!==''&&Number.isFinite(Number($('value').value)))change(points()[selected].t,Number($('value').value)*2.55);};
 $('remove').onclick=()=>{if(selected>0&&selected<points().length-1){points().splice(selected,1);selected--;sync();}};
 $('save').onclick=async()=>{
  try{
