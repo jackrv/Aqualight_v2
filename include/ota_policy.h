@@ -3,7 +3,8 @@
 #include <stddef.h>
 #include <string.h>
 
-// Kept in the firmware image by /status; prevents flashing an unrelated .bin.
+// FirmwareMarkerScanner keeps this string in every image; a .bin without it
+// (another project, another board) is refused before the final block is written.
 constexpr char FIRMWARE_MARKER[] = "AQUALIGHT:ESP8266:D1_MINI:OTA_V1";
 constexpr uint32_t OTA_WINDOW_MS = 5 * 60 * 1000;
 
@@ -50,3 +51,32 @@ public:
     }
     bool valid() const { return found; }
 };
+
+// Report actual bytes written, at 10% boundaries and at completion.
+class OtaProgress {
+    unsigned last = 0;
+public:
+    unsigned percent(size_t received, size_t total) const {
+        return total ? unsigned((received > total ? total : received) * 100 / total) : 0;
+    }
+    bool advance(size_t received, size_t total) {
+        unsigned current = percent(received, total);
+        if (current <= last || (current < 100 && current / 10 == last / 10)) return false;
+        last = current;
+        return true;
+    }
+};
+
+// Telegram update_id is a signed 32-bit integer; the cursor is update_id + 1.
+inline bool parseTelegramCursor(const char* value, int64_t& cursor) {
+    if (!value || !*value) return false;
+    int64_t result = 0;
+    for (size_t i = 0; value[i]; ++i) {
+        if (i >= 10 || value[i] < '0' || value[i] > '9') return false;
+        result = result * 10 + value[i] - '0';
+        if (result > int64_t(INT32_MAX) + 1) return false;
+    }
+    if (result == 0) return false;
+    cursor = result;
+    return true;
+}

@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <math.h>
 #include <ArduinoJson.h>
 constexpr size_t MAX_POINTS = 12;
 constexpr size_t MAX_SCHEDULE_BYTES = 2048;
@@ -44,4 +45,42 @@ inline uint8_t interpolate(const Channel& ch, uint32_t second) {
         }
     }
     return 0;
+}
+
+// Direction of the segment that follows `second`: +1 rising, -1 falling, 0 steady.
+inline int8_t trend(const Channel& ch, uint32_t second) {
+    for (uint8_t i = 1; i < ch.count; ++i) {
+        if (second < uint32_t(ch.points[i].t) * 60) {
+            int delta = int(ch.points[i].v) - int(ch.points[i - 1].v);
+            return delta > 0 ? 1 : delta < 0 ? -1 : 0;
+        }
+    }
+    return 0;
+}
+
+// The schedule stays 0…255; the output is finer. Interpolating in 1/64 steps and
+// applying gamma on a 10-bit duty hides the stairs of a slow sunrise.
+constexpr uint16_t FINE_STEPS = 64;
+constexpr uint16_t FINE_MAX = 255 * FINE_STEPS;
+constexpr uint16_t PWM_RANGE = 1023;
+
+inline uint16_t interpolateFine(const Channel& ch, uint32_t second) {
+    for (uint8_t i = 1; i < ch.count; ++i) {
+        const Point& a = ch.points[i - 1];
+        const Point& b = ch.points[i];
+        if (second <= uint32_t(b.t) * 60) {
+            int32_t value = int32_t(a.v) * FINE_STEPS + (int32_t(b.v) - a.v) * FINE_STEPS *
+                int32_t(second - a.t * 60UL) / int32_t((b.t - a.t) * 60UL);
+            return static_cast<uint16_t>(value);
+        }
+    }
+    return 0;
+}
+
+// Perceived brightness -> PWM duty (gamma 2.2). Anything above zero stays lit.
+inline uint16_t gammaDuty(uint16_t fine) {
+    if (!fine) return 0;
+    if (fine >= FINE_MAX) return PWM_RANGE;
+    uint16_t duty = static_cast<uint16_t>(powf(float(fine) / FINE_MAX, 2.2f) * PWM_RANGE + 0.5f);
+    return duty ? duty : 1;
 }

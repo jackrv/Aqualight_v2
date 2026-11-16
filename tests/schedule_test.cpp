@@ -20,6 +20,21 @@ int main() {
     assert(interpolate(candidate.channels[0],5400)==120);
     assert(interpolate(candidate.channels[0],7200)==0);
     assert(interpolate(candidate.channels[0],86399)==0);
+    assert(trend(candidate.channels[0],0)==1);
+    assert(trend(candidate.channels[0],3599)==1);
+    assert(trend(candidate.channels[0],3600)==-1);
+    assert(trend(candidate.channels[0],7200)==0);
+    assert(trend(candidate.channels[0],86399)==0);
+    // The fine value is the 8-bit one with six extra bits between its steps.
+    for (uint32_t second : {0u, 1u, 7u, 1800u, 3599u, 3600u, 5400u, 7200u, 86399u})
+        assert(interpolateFine(candidate.channels[0],second)/FINE_STEPS==interpolate(candidate.channels[0],second));
+    assert(interpolateFine(candidate.channels[0],1)==4);
+    assert(interpolateFine(candidate.channels[0],3600)==240*FINE_STEPS);
+    assert(gammaDuty(0)==0);
+    assert(gammaDuty(1)==1);
+    assert(gammaDuty(FINE_MAX)==PWM_RANGE);
+    assert(gammaDuty(FINE_MAX/2)>200 && gammaDuty(FINE_MAX/2)<240);
+    for (uint16_t fine=1; fine<=FINE_MAX; ++fine) assert(gammaDuty(fine)>=gammaDuty(fine-1));
     doc["ch0"][1]["t"]=0;assert(!valid());doc["ch0"][1]["t"]=60;
     doc["ch0"][1]["v"]=256;assert(!valid());
     doc["ch0"][1]["v"]=-1;assert(!valid());
