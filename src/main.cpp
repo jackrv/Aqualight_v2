@@ -1039,6 +1039,34 @@ String controllerStatus() {
     return status;
 }
 
+// The command menu of one chat. Telegram keeps it, so /start is the only place
+// that sets it; the owner's menu also offers the firmware update.
+void registerCommands(const char* chat, bool owner) {
+    String payload;
+    {
+        DynamicJsonDocument request(1024);
+        JsonArray commands = request.createNestedArray("commands");
+        auto add = [&commands](const __FlashStringHelper* command, const __FlashStringHelper* description) {
+            JsonObject item = commands.createNestedObject();
+            item["command"] = command;
+            item["description"] = description;
+        };
+        add(F("status"), F("Состояние контроллера"));
+        add(F("editor"), F("Обновить кнопку редактора"));
+        add(F("schedule"), F("График в JSON"));
+        if (owner) add(F("update"), F("Обновить прошивку"));
+        add(F("start"), F("Что умеет бот"));
+        JsonObject scope = request.createNestedObject("scope");
+        scope["type"] = "chat";
+        scope["chat_id"] = chat;
+        if (request.overflowed()) return;
+        serializeJson(request, payload);
+    }
+    DynamicJsonDocument response(512);
+    if (!api("setMyCommands", payload, response))
+        logLine(PSTR("[Telegram] Could not set the command menu"));
+}
+
 // After a change every other account gets a fresh editor button: the schedule
 // travels inside the button's URL, so their old button would open stale data.
 void refreshOtherEditors(const String& author) {
@@ -1096,10 +1124,21 @@ void handleMessage(JsonObjectConst message) {
             deleteChatMessage(message["message_id"] | int32_t(0), chat);
     } else if (text == "/schedule") {
         reply(scheduleJson(schedule));
-    } else if (owner) {
-        reply(F("Управление светом аквариума\n/editor — открыть график\n/status — время и яркость\n/schedule — текущий JSON\n/update — обновить прошивку\nПосле сохранения открывайте редактор через обновлённую кнопку."), true);
+    } else if (text == "/start" || text.startsWith("/start ")) {
+        // First contact: a welcome with the current state, the editor button and
+        // this account's command menu next to the message field.
+        String welcome = F("🐠 AquaLight на связи\n");
+        if (!scheduleLoaded) welcome += F("🌑 Графика нет — свет выключен");
+        else welcome += F("💡 Свет работает по графику");
+        if (waterTempFresh()) { welcome += F(" · 🌡 "); welcome += String(waterTemp, 1); welcome += F(" °C"); }
+        welcome += F("\n\nКнопка «Редактор освещения» под полем ввода открывает график.\n"
+            "/status — состояние контроллера\n/editor — обновить кнопку редактора\n/schedule — график в JSON");
+        if (owner) welcome += F("\n/update — обновить прошивку");
+        if (reply(welcome, true)) registerCommands(chat, owner);
+    } else if (text == "/editor") {
+        reply(F("💡 Кнопка редактора обновлена — в ней текущий график."), true);
     } else {
-        reply(F("Управление светом аквариума\n/editor — открыть график\n/status — время и яркость\n/schedule — текущий JSON\nПосле сохранения открывайте редактор через обновлённую кнопку."), true);
+        reply(F("Не знаю такой команды. /start покажет, что я умею."));
     }
 }
 
