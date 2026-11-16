@@ -1,6 +1,10 @@
 #include <cassert>
 #include <iostream>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include "schedule.h"
+#include "default_schedule.h"
 
 int main() {
     DynamicJsonDocument doc(JSON_OBJECT_SIZE(4) + 4 * (JSON_ARRAY_SIZE(13) + 13 * JSON_OBJECT_SIZE(2)) + 256);
@@ -61,5 +65,15 @@ int main() {
     }
     assert(!doc.overflowed());assert(valid());assert(measureJson(doc)<=MAX_SCHEDULE_BYTES);
     auto p=doc["ch0"].createNestedObject();p["t"]=1440;p["v"]=0;assert(!valid());
+    // The schedule built into the firmware is valid and is the one in data/.
+    DynamicJsonDocument builtIn(4096);
+    assert(!deserializeJson(builtIn, DEFAULT_SCHEDULE_JSON));
+    assert(parseSchedule(builtIn.as<JsonVariantConst>(), candidate));
+    std::ifstream file("data/schedule.json");
+    assert(file.good());   // run from the project root
+    std::stringstream content; content << file.rdbuf();
+    std::string onDisk = content.str();
+    while (!onDisk.empty() && (onDisk.back() == '\n' || onDisk.back() == '\r')) onDisk.pop_back();
+    assert(onDisk == DEFAULT_SCHEDULE_JSON);
     std::cout << "Firmware validation and interpolation: PASS\n";
 }

@@ -1,0 +1,10 @@
+#pragma once
+#ifndef PROGMEM
+#define PROGMEM
+#endif
+
+// Starting schedule, written to /schedule.json when the board has none (first
+// start after an OTA from another firmware, or a damaged file). It must stay
+// identical to data/schedule.json; tests/schedule_test.cpp compares the two.
+static const char DEFAULT_SCHEDULE_JSON[] PROGMEM =
+    R"JSON({"ch0":[{"t":0,"v":0},{"t":420,"v":0},{"t":540,"v":186},{"t":660,"v":230},{"t":720,"v":202},{"t":1080,"v":90},{"t":1140,"v":0},{"t":1440,"v":0}],"ch1":[{"t":0,"v":0},{"t":360,"v":0},{"t":539,"v":228},{"t":540,"v":255},{"t":660,"v":255},{"t":661,"v":122},{"t":780,"v":0},{"t":1440,"v":0}],"ch2":[{"t":0,"v":0},{"t":1080,"v":0},{"t":1200,"v":167},{"t":1320,"v":167},{"t":1440,"v":0}],"ch3":[{"t":0,"v":0},{"t":360,"v":0},{"t":540,"v":255},{"t":660,"v":255},{"t":661,"v":122},{"t":780,"v":0},{"t":1080,"v":0},{"t":1200,"v":228},{"t":1320,"v":228},{"t":1321,"v":255},{"t":1440,"v":0}]})JSON";

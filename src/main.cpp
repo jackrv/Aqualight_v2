@@ -19,11 +19,13 @@
 #include <coredecls.h>
 #include <sys/time.h>
 #include "recovery.h"
+#include "default_schedule.h"
 
 namespace {
 Schedule schedule;
 bool fsReady = false;
 bool scheduleLoaded = false;
+bool scheduleFromFirmware = false;   // the starting schedule was applied on this boot
 bool telegramOnline = false;
 bool botReady = false;
 int64_t nextUpdate = 0;
@@ -360,6 +362,12 @@ bool saveSchedule(const Schedule& candidate) {
 // Called from the main code and from lightTimer. The timer fires whenever the
 // main code yields, which analogWrite() itself may do: a nested call would
 // overwrite the PWM update still in flight, so it leaves the work to the outer one.
+bool defaultSchedule(Schedule& candidate) {
+    DynamicJsonDocument doc(4096);
+    return !deserializeJson(doc, FPSTR(DEFAULT_SCHEDULE_JSON)) &&
+        parseSchedule(doc.as<JsonVariantConst>(), candidate);
+}
+
 void updateLight() {
     static bool busy = false;
     if (busy) return;
@@ -615,8 +623,9 @@ void greetOnBoot() {
     updateLight();
     String text = String(F("👋 Привет! AquaLight включён и готов к управлению.\n\nДата и время: ")) +
                   formatKyivTime(time(nullptr));
-    if (!fsReady) text += F("\n⚠️ LittleFS недоступна. Свет выключен; сохранение графика и OTA недоступны.");
+    if (!fsReady) text += F("\n⚠️ LittleFS недоступна. Свет работает по графику из прошивки; сохранение графика и OTA недоступны.");
     else if (!scheduleLoaded) text += F("\n💡 График ещё не настроен. Свет выключен до сохранения графика.");
+    else if (scheduleFromFirmware) text += F("\n💡 На плате не было графика — записан стартовый из прошивки. Освещение работает по нему.");
     else text += F("\n💡 График загружен. Освещение работает по расписанию.");
     text += F("\n\nОткройте редактор кнопкой ниже.\n/status — состояние контроллера\n/update — обновить прошивку");
     bootAnnounced = sendMessage(text, true);
@@ -693,8 +702,9 @@ void reportOtaBoot() {
         String(F("❌ Прошивка не обновилась: контрольная сумма отличается, работает прежняя версия"));
     text += F("\n🔄 "); text += FIRMWARE_VERSION;
     text += F(" · сборка "); text += formatShortDateTime(buildTime(), false);
-    if (!fsReady) text += F("\n⚠️ LittleFS недоступна — свет выключен");
+    if (!fsReady) text += F("\n⚠️ LittleFS недоступна — график из прошивки");
     else if (!scheduleLoaded) text += F("\n🌑 Графика нет — свет выключен");
+    else if (scheduleFromFirmware) text += F("\n💡 Записан стартовый график из прошивки");
     else text += F("\n💡 Свет работает по графику");
     text += F("\n\n/status — состояние · /update — обновление");
     // The result is a new message with a fresh editor button. Only once it has
@@ -967,8 +977,8 @@ String controllerStatus() {
     status = F("🐠 AquaLight · ");
     status += formatShortDateTime(local, true);
     if (!ntpSynced) status += F(" · ⏳ без NTP");
-    if (!fsReady) status += F("\n⚠️ LittleFS недоступна — свет выключен");
-    else if (!scheduleLoaded) status += F("\n🌑 Графика нет — свет выключен");
+    if (!fsReady) status += F("\n⚠️ LittleFS недоступна — график из прошивки, сохранение не работает");
+    if (!scheduleLoaded) status += F("\n🌑 Графика нет — свет выключен");
     else {
         uint16_t next = 1440;
         for (const Channel& ch : schedule.channels)
@@ -1255,18 +1265,32 @@ void setup() {
     analogWriteRange(PWM_RANGE);
     analogWriteFreq(1000);
     for (uint8_t pin : PWM_PINS) { pinMode(pin, OUTPUT); analogWrite(pin, 0); }
-    // Safe initial schedule: dark until an owner explicitly saves a graph.
+    // Dark until a schedule is loaded from the file system or from the firmware.
     for (Channel& ch : schedule.channels) { ch.count = 2; ch.points[0] = {0, 0}; ch.points[1] = {1440, 0}; }
     LittleFSConfig fsConfig;
     fsConfig.setAutoFormat(false);
     LittleFS.setConfig(fsConfig);
     fsReady = LittleFS.begin();
     if (fsReady) {
-        if (!loadSchedule("/schedule.json")) logLine(PSTR("[FS] No valid schedule; lights off"));
+        if (!loadSchedule("/schedule.json")) {
+            // No computer is needed for the first start: the firmware carries the
+            // starting schedule and creates the file itself.
+            bool existed = LittleFS.exists("/schedule.json");
+            Schedule initial;
+            if (defaultSchedule(initial) && saveSchedule(initial)) {
+                scheduleFromFirmware = true;
+                logLine(PSTR("[FS] %s /schedule.json; starting schedule from the firmware written"),
+                    existed ? "Invalid" : "No");
+            } else logLine(PSTR("[FS] No valid schedule and the starting one could not be written; lights off"));
+        }
         loadOtaReceipt();
         loadCallbackCheckpoint();
         loadWifiConfig();
-    } else logLine(PSTR("[FS] Mount failed; uploadfs required for first setup"));
+    } else {
+        // Nothing can be saved, but the aquarium should not stay dark.
+        scheduleLoaded = scheduleFromFirmware = defaultSchedule(schedule);
+        logLine(PSTR("[FS] Mount failed; running the starting schedule from the firmware, uploadfs required"));
+    }
     if (wifiSsid.isEmpty()) { wifiSsid = F(WIFI_SSID); wifiPass = F(WIFI_PASS); }
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
