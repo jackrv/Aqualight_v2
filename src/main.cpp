@@ -20,6 +20,12 @@
 #include <sys/time.h>
 #include "recovery.h"
 #include "default_schedule.h"
+#include "access.h"
+
+// Optional in secrets.h: Telegram IDs of additional users, e.g. "111111,222222".
+#ifndef TELEGRAM_EXTRA_USERS
+#define TELEGRAM_EXTRA_USERS ""
+#endif
 
 namespace {
 Schedule schedule;
@@ -45,6 +51,8 @@ os_timer_t lightTimer;
 constexpr uint32_t SAVED_CLOCK_RTC_OFFSET = 64;
 constexpr char SETUP_AP_NAME[] = "AquaLight-Setup";
 String wifiSsid, wifiPass;
+char extraUsers[MAX_EXTRA_USERS][TELEGRAM_ID_SIZE];
+uint8_t extraUserCount = 0;
 GyverDS18Single waterSensor(WATER_TEMP_PIN);
 constexpr uint32_t WATER_TEMP_PERIOD_MS = 10000, WATER_TEMP_STALE_MS = 60000;
 float waterTemp = 0;
@@ -561,14 +569,21 @@ String urlEncode(const String& input) {
     return out;
 }
 
-bool sendMessage(const String& text, bool editor = false, int32_t* messageId = nullptr) {
+bool isOwner(const String& id) { return id == TELEGRAM_OWNER_ID; }
+bool isExtraUser(const String& id) {
+    for (uint8_t i = 0; i < extraUserCount; ++i) if (id == extraUsers[i]) return true;
+    return false;
+}
+
+bool sendMessage(const String& text, bool editor = false, int32_t* messageId = nullptr,
+                 const char* chat = TELEGRAM_OWNER_ID) {
     // URL construction for a full editor keyboard needs more working RAM than
     // a short status. Release idle TLS buffers before building that payload.
     if (editor) closeTelegramConnection();
     String payload;
     {
         DynamicJsonDocument request(editor ? 8192 : JSON_OBJECT_SIZE(2) + text.length() + 64);
-        request["chat_id"] = TELEGRAM_OWNER_ID;
+        request["chat_id"] = chat;   // the pointer outlives this request
         request["text"] = text;
         if (editor) {
             String url = WEBAPP_URL;
@@ -600,11 +615,11 @@ bool sendMessage(const String& text, bool editor = false, int32_t* messageId = n
 }
 
 // Best effort: Telegram refuses to delete messages older than 48 hours.
-void deleteChatMessage(int32_t messageId) {
+void deleteChatMessage(int32_t messageId, const char* chat = TELEGRAM_OWNER_ID) {
     String payload;
     {
         DynamicJsonDocument request(256);
-        if (!fillStatusCommandDelete(request, TELEGRAM_OWNER_ID, messageId)) return;
+        if (!fillStatusCommandDelete(request, chat, messageId)) return;
         serializeJson(request, payload);
     }
     DynamicJsonDocument response(512);
@@ -1024,15 +1039,31 @@ String controllerStatus() {
     return status;
 }
 
+// After a change every other account gets a fresh editor button: the schedule
+// travels inside the button's URL, so their old button would open stale data.
+void refreshOtherEditors(const String& author) {
+    const __FlashStringHelper* note = F("✏️ График освещения изменён другим пользователем. Кнопка редактора обновлена.");
+    if (!isOwner(author)) sendMessage(note, true);
+    for (uint8_t i = 0; i < extraUserCount; ++i)
+        if (author != extraUsers[i]) sendMessage(note, true, nullptr, extraUsers[i]);
+}
+
 void handleMessage(JsonObjectConst message) {
-    // Restrict both the sender and private chat. web_app_data is untrusted input.
-    String owner = TELEGRAM_OWNER_ID;
-    if (message["chat"]["type"] != "private" ||
-        message["chat"]["id"].as<String>() != owner ||
-        message["from"]["id"].as<String>() != owner) return;
+    // Only a private chat with a known account. web_app_data is untrusted input.
+    const String sender = message["from"]["id"].as<String>();
+    const bool owner = isOwner(sender);
+    if (message["chat"]["type"] != "private" || message["chat"]["id"].as<String>() != sender ||
+        !(owner || isExtraUser(sender))) return;
+    const char* chat = sender.c_str();
+    auto reply = [chat](const String& text, bool editor = false) {
+        return sendMessage(text, editor, nullptr, chat);
+    };
     const char* data = message["web_app_data"]["data"];
     String text = message["text"] | "";
-    if (text == "/update") {
+    const bool firmware = text == "/update" || text == "/cancel" || message["document"].is<JsonObjectConst>();
+    if (firmware && !owner) {
+        reply(F("Обновление прошивки доступно только владельцу."));
+    } else if (text == "/update") {
         otaWindow.arm(millis());
         sendMessage(String(F("Обновление разрешено на 5 минут. Отправьте firmware.bin как документ с подписью md5:… из файла firmware.bin.md5. Отправка запускает установку и перезагрузку. /cancel — отмена. Доступно OTA: ")) + String(otaCapacity()) + " байт.");
     } else if (text == "/cancel") {
@@ -1043,7 +1074,7 @@ void handleMessage(JsonObjectConst message) {
         queueFirmware(message);
     } else if (data || text.startsWith("{")) {
         const char* json = data ? data : text.c_str();
-        if (strlen(json) > MAX_SCHEDULE_BYTES) { sendMessage(F("График слишком большой.")); return; }
+        if (strlen(json) > MAX_SCHEDULE_BYTES) { reply(F("График слишком большой.")); return; }
         DynamicJsonDocument doc(4096);
         Schedule candidate;
         auto error = deserializeJson(doc, json);
@@ -1051,21 +1082,24 @@ void handleMessage(JsonObjectConst message) {
         doc.clear();
         doc.shrinkToFit();
         if (!valid) {
-            sendMessage(F("Неверный график: нужны ch0…ch3, 2–12 точек, t=0…1440, v=0…255. Время строго возрастает, крайние точки 0 и 1440 с одинаковой яркостью."));
+            reply(F("Неверный график: нужны ch0…ch3, 2–12 точек, t=0…1440, v=0…255. Время строго возрастает, крайние точки 0 и 1440 с одинаковой яркостью."));
         } else if (!saveSchedule(candidate)) {
-            sendMessage(F("Ошибка записи LittleFS. Старый график сохранён."));
+            reply(F("Ошибка записи LittleFS. Старый график сохранён."));
         } else {
             updateLight();
-            sendMessage(F("✅ График сохранён. Кнопка обновлена актуальными данными."), true);
+            reply(F("✅ График сохранён. Кнопка обновлена актуальными данными."), true);
+            refreshOtherEditors(sender);
         }
     } else if (text == "/status") {
-        // Delete only the owner's incoming command, after the status is delivered.
-        if (sendMessage(controllerStatus()))
-            deleteChatMessage(message["message_id"] | int32_t(0));
+        // Delete only the sender's incoming command, after the status is delivered.
+        if (reply(controllerStatus()))
+            deleteChatMessage(message["message_id"] | int32_t(0), chat);
     } else if (text == "/schedule") {
-        sendMessage(scheduleJson(schedule));
+        reply(scheduleJson(schedule));
+    } else if (owner) {
+        reply(F("Управление светом аквариума\n/editor — открыть график\n/status — время и яркость\n/schedule — текущий JSON\n/update — обновить прошивку\nПосле сохранения открывайте редактор через обновлённую кнопку."), true);
     } else {
-        sendMessage(F("Управление светом аквариума\n/editor — открыть график\n/status — время и яркость\n/schedule — текущий JSON\n/update — обновить прошивку\nПосле сохранения открывайте редактор через обновлённую кнопку."), true);
+        reply(F("Управление светом аквариума\n/editor — открыть график\n/status — время и яркость\n/schedule — текущий JSON\nПосле сохранения открывайте редактор через обновлённую кнопку."), true);
     }
 }
 
@@ -1291,6 +1325,8 @@ void setup() {
         scheduleLoaded = scheduleFromFirmware = defaultSchedule(schedule);
         logLine(PSTR("[FS] Mount failed; running the starting schedule from the firmware, uploadfs required"));
     }
+    extraUserCount = parseUserIds(TELEGRAM_EXTRA_USERS, TELEGRAM_OWNER_ID, extraUsers, MAX_EXTRA_USERS);
+    logLine(PSTR("[Telegram] Extra users: %u"), unsigned(extraUserCount));
     if (wifiSsid.isEmpty()) { wifiSsid = F(WIFI_SSID); wifiPass = F(WIFI_PASS); }
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);

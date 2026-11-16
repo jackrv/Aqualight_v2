@@ -80,9 +80,9 @@ inline const char* fillOtaStatusEdit(JsonDocument& request, const char* owner,
     return caption ? "editMessageCaption" : "editMessageText";
 }
 
-inline bool fillStatusCommandDelete(JsonDocument& request, const char* owner, int32_t messageId) {
+inline bool fillStatusCommandDelete(JsonDocument& request, const char* chat, int32_t messageId) {
     if (messageId <= 0) return false;
-    request["chat_id"] = owner;
+    request["chat_id"] = chat;
     request["message_id"] = messageId;
     return true;
 }
