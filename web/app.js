@@ -19,6 +19,14 @@ names.forEach((name,c)=>{
 });
 function geometry(){const r=canvas.getBoundingClientRect();return {w:r.width,h:r.height,l:37,r:r.width-23,t:18,b:r.height-28};}
 function xy(p,g){return [g.l+p.t/1440*(g.r-g.l),g.b-p.v/255*(g.b-g.t)];}
+// Segments are drawn with the same cosine easing the controller applies.
+function curve(a,g){
+ a.forEach((p,i)=>{
+   if(!i){ctx.moveTo(...xy(p,g));return;}
+   const q=a[i-1],steps=q.v===p.v?1:Math.max(2,Math.ceil((xy(p,g)[0]-xy(q,g)[0])/3));
+   for(let k=1;k<=steps;k++){const t=q.t+(p.t-q.t)*k/steps;ctx.lineTo(...xy({t,v:Schedule.valueAt(a,t)},g));}
+ });
+}
 function draw(){
  const g=geometry(),dpr=window.devicePixelRatio||1;
  canvas.width=Math.round(g.w*dpr);canvas.height=Math.round(g.h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,g.w,g.h);
@@ -27,7 +35,7 @@ function draw(){
  for(let hour=0;hour<=24;hour+=6){const x=xy({t:hour*60,v:0},g)[0];ctx.fillStyle='#9eb5c2';ctx.fillText(String(hour).padStart(2,'0')+':00',x-14,g.h-8);}
  for(const c of [0,1,2,3].filter(c=>c!==channel).concat(channel)){
    ctx.globalAlpha=c===channel?1:.23;ctx.strokeStyle=colors[c];ctx.lineWidth=c===channel?2.5:1.5;ctx.beginPath();
-   data['ch'+c].forEach((p,i)=>{const [x,y]=xy(p,g);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();
+   curve(data['ch'+c],g);ctx.stroke();
  }
  ctx.globalAlpha=1;
  points().forEach((p,i)=>{const [x,y]=xy(p,g);ctx.beginPath();ctx.arc(x,y,i===selected?7:5,0,Math.PI*2);ctx.fillStyle=colors[channel];ctx.fill();if(i===selected){ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();}});

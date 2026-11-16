@@ -17,6 +17,16 @@
     for(let c=0;c<4;c++) data['ch'+c]=[{t:0,v:0},{t:420,v:0},{t:540,v:180},{t:1140,v:180},{t:1260,v:0},{t:1440,v:0}];
     return data;
   }
-  const api={validate,defaults};
+  // Cosine ease-in-out between two points; the firmware uses the same curve.
+  function ease(progress) { return (1-Math.cos(progress*Math.PI))/2; }
+  // Brightness of one channel (array of points) at a fractional minute of the day.
+  function valueAt(points, minute) {
+    for (let i=1;i<points.length;i++) {
+      const a=points[i-1],b=points[i];
+      if (minute<=b.t) return a.v+(b.v-a.v)*ease((minute-a.t)/(b.t-a.t));
+    }
+    return 0;
+  }
+  const api={validate,defaults,ease,valueAt};
   if(typeof module!=='undefined') module.exports=api; else root.Schedule=api;
 })(globalThis);

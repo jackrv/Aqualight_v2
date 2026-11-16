@@ -15,6 +15,7 @@
 #include <new>
 #include <ESP8266WebServer.h>
 #include <osapi.h>
+#include <GyverDS18.h>
 #include <coredecls.h>
 #include <sys/time.h>
 #include "recovery.h"
@@ -42,6 +43,11 @@ os_timer_t lightTimer;
 constexpr uint32_t SAVED_CLOCK_RTC_OFFSET = 64;
 constexpr char SETUP_AP_NAME[] = "AquaLight-Setup";
 String wifiSsid, wifiPass;
+GyverDS18Single waterSensor(WATER_TEMP_PIN);
+constexpr uint32_t WATER_TEMP_PERIOD_MS = 10000, WATER_TEMP_STALE_MS = 60000;
+float waterTemp = 0;
+uint32_t waterTempAt = 0;
+bool waterTempKnown = false;
 std::unique_ptr<ESP8266WebServer> portal;
 uint32_t lastWifiOk = 0, restartAt = 0;
 bool restartPending = false, stationPaused = false;
@@ -55,6 +61,7 @@ bool otaMessageIsCaption = false;
 char expectedBootMd5[33] = {};
 uint32_t lastBootReport = 0;
 bool bootReportAttempted = false;
+bool bootAnnounced = false;   // one boot message per start: greeting or OTA result
 int64_t callbackCheckpoint = 0;
 String cachedFirmwareMd5;
 uint64_t uptimeMs = 0;
@@ -373,6 +380,28 @@ void updateLight() {
     busy = false;
 }
 
+// One conversion every 10 s without blocking: request, wait out the conversion
+// time, read. A reading older than a minute is reported as a silent sensor.
+void serviceWaterSensor() {
+    static uint32_t timer = 0;
+    static bool converting = false;
+    uint32_t now = millis();
+    if (converting) {
+        if (now - timer < waterSensor.getConversionTime()) return;
+        converting = false;
+        if (waterSensor.readTemp()) {
+            waterTemp = waterSensor.getTemp();
+            waterTempAt = now;
+            waterTempKnown = true;
+        }
+    } else if (!timer || now - timer >= WATER_TEMP_PERIOD_MS) {
+        converting = waterSensor.requestTemp();
+        timer = now ? now : 1;
+    }
+}
+
+bool waterTempFresh() { return waterTempKnown && millis() - waterTempAt < WATER_TEMP_STALE_MS; }
+
 // RTC memory outlives every reset except a power loss, so after OTA, watchdog
 // or a crash the schedule resumes at once instead of waiting for NTP.
 void saveClock() {
@@ -562,11 +591,24 @@ bool sendMessage(const String& text, bool editor = false, int32_t* messageId = n
     return true;
 }
 
+// Best effort: Telegram refuses to delete messages older than 48 hours.
+void deleteChatMessage(int32_t messageId) {
+    String payload;
+    {
+        DynamicJsonDocument request(256);
+        if (!fillStatusCommandDelete(request, TELEGRAM_OWNER_ID, messageId)) return;
+        serializeJson(request, payload);
+    }
+    DynamicJsonDocument response(512);
+    if (!api("deleteMessage", payload, response))
+        logLine(PSTR("[Telegram] Could not delete message %ld"), static_cast<long>(messageId));
+}
+
 void greetOnBoot() {
-    static bool delivered = false;
     static bool attempted = false;
     static uint32_t lastAttempt = 0;
-    if (delivered || !telegramOnline || !pendingFirmware.fileId.isEmpty()) return;
+    // After an update the OTA result replaces the greeting.
+    if (bootAnnounced || expectedBootMd5[0] || !telegramOnline || !pendingFirmware.fileId.isEmpty()) return;
     if (attempted && millis() - lastAttempt < 30000) return;
     attempted = true;
     lastAttempt = millis();
@@ -577,8 +619,8 @@ void greetOnBoot() {
     else if (!scheduleLoaded) text += F("\n💡 График ещё не настроен. Свет выключен до сохранения графика.");
     else text += F("\n💡 График загружен. Освещение работает по расписанию.");
     text += F("\n\nОткройте редактор кнопкой ниже.\n/status — состояние контроллера\n/update — обновить прошивку");
-    delivered = sendMessage(text, true);
-    if (delivered) logLine(PSTR("[Telegram] Boot greeting delivered"));
+    bootAnnounced = sendMessage(text, true);
+    if (bootAnnounced) logLine(PSTR("[Telegram] Boot greeting delivered"));
 }
 
 bool otaStatus(const String& text) {
@@ -647,15 +689,25 @@ void reportOtaBoot() {
         return;
     }
     bool matches = runningMd5.equalsIgnoreCase(expectedBootMd5);
-    String text = matches ? String(F("✅ Обновление завершено. Новая прошивка запущена.")) :
-        String(F("❌ Новая прошивка не запущена: контрольная сумма отличается. Обновление было прервано или не завершилось."));
-    text += String(F("\nВерсия: ")) + FIRMWARE_VERSION;
-    text += String(F("\nСборка: ")) + formatBuildTime();
-    text += F("\nПричина запуска: "); text += resetReasonLabel();
-    if (otaStatus(text)) {
-        LittleFS.remove("/ota-result.json");
-        expectedBootMd5[0] = '\0';
-    }
+    String text = matches ? String(F("✅ Прошивка обновлена")) :
+        String(F("❌ Прошивка не обновилась: контрольная сумма отличается, работает прежняя версия"));
+    text += F("\n🔄 "); text += FIRMWARE_VERSION;
+    text += F(" · сборка "); text += formatShortDateTime(buildTime(), false);
+    if (!fsReady) text += F("\n⚠️ LittleFS недоступна — свет выключен");
+    else if (!scheduleLoaded) text += F("\n🌑 Графика нет — свет выключен");
+    else text += F("\n💡 Свет работает по графику");
+    text += F("\n\n/status — состояние · /update — обновление");
+    // The result is a new message with a fresh editor button. Only once it has
+    // been delivered is the firmware message (file and progress) removed.
+    if (!sendMessage(text, true)) return;
+    logLine(PSTR("[OTA] Boot result delivered: %s"), matches ? "updated" : "MD5 mismatch");
+    if (otaMessageId) deleteChatMessage(otaMessageId);
+    LittleFS.remove("/ota-result.json");
+    expectedBootMd5[0] = '\0';
+    otaMessageId = 0;
+    otaMessageIsCaption = false;
+    otaState = matches ? String() : String(F("Последнее обновление не установилось: MD5 отличается"));
+    bootAnnounced = true;
 }
 
 void queueFirmware(JsonObjectConst message, bool fromButton = false) {
@@ -941,7 +993,9 @@ String controllerStatus() {
             if (direction) status += direction > 0 ? F(" ▲") : F(" ▼");
         }
     }
-    status += F("\n\n📶 "); status += WiFi.RSSI();
+    if (waterTempFresh()) { status += F("\n\n🌡 Вода "); status += String(waterTemp, 1); status += F(" °C"); }
+    else status += F("\n\n🌡 Датчик воды не отвечает");
+    status += F("\n📶 "); status += WiFi.RSSI();
     status += F(" дБм · "); status += WiFi.localIP().toString();
     status += F("\n⏱ "); status += formatUptime();
     status += resetWasAbnormal() ? F(" · ⚠️ ") : F(" · "); status += resetReasonLabel();
@@ -958,18 +1012,6 @@ String controllerStatus() {
     if (!otaState.isEmpty()) { status += F("\n📦 "); status += otaState; }
     else if (otaWindow.active(millis())) status += F("\n📦 Жду firmware.bin после /update");
     return status;
-}
-
-void deleteStatusCommand(int32_t messageId) {
-    String payload;
-    {
-        DynamicJsonDocument request(256);
-        if (!fillStatusCommandDelete(request, TELEGRAM_OWNER_ID, messageId)) return;
-        serializeJson(request, payload);
-    }
-    DynamicJsonDocument response(512);
-    if (!api("deleteMessage", payload, response))
-        logLine(PSTR("[Telegram] Could not delete /status command %ld"), static_cast<long>(messageId));
 }
 
 void handleMessage(JsonObjectConst message) {
@@ -1009,7 +1051,7 @@ void handleMessage(JsonObjectConst message) {
     } else if (text == "/status") {
         // Delete only the owner's incoming command, after the status is delivered.
         if (sendMessage(controllerStatus()))
-            deleteStatusCommand(message["message_id"] | int32_t(0));
+            deleteChatMessage(message["message_id"] | int32_t(0));
     } else if (text == "/schedule") {
         sendMessage(scheduleJson(schedule));
     } else {
@@ -1246,6 +1288,7 @@ void loop() {
     trackUptime();
     logConnectivity();
     saveClock();
+    serviceWaterSensor();
     serviceWifiPortal();
     if (WiFi.status() == WL_CONNECTED && clockReady()) reportOtaBoot();
     if (!pendingFirmware.fileId.isEmpty()) {

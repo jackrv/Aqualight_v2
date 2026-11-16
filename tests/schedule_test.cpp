@@ -25,11 +25,19 @@ int main() {
     assert(trend(candidate.channels[0],3600)==-1);
     assert(trend(candidate.channels[0],7200)==0);
     assert(trend(candidate.channels[0],86399)==0);
-    // The fine value is the 8-bit one with six extra bits between its steps.
-    for (uint32_t second : {0u, 1u, 7u, 1800u, 3599u, 3600u, 5400u, 7200u, 86399u})
-        assert(interpolateFine(candidate.channels[0],second)/FINE_STEPS==interpolate(candidate.channels[0],second));
-    assert(interpolateFine(candidate.channels[0],1)==4);
+    // Cosine easing: exact at the points and the middle, slow near both ends.
+    assert(interpolateFine(candidate.channels[0],0)==0);
+    assert(interpolateFine(candidate.channels[0],1800)==120*FINE_STEPS);
     assert(interpolateFine(candidate.channels[0],3600)==240*FINE_STEPS);
+    assert(interpolate(candidate.channels[0],900)==35);    // a quarter of the way: 14.6%, not 25%
+    assert(interpolate(candidate.channels[0],2700)==205);  // three quarters: 85.4%
+    assert(interpolate(candidate.channels[0],4500)==205);  // mirrored on the way down
+    assert(interpolateFine(candidate.channels[0],60)<interpolateFine(candidate.channels[0],120));
+    for (uint32_t second=1; second<=3600; ++second)
+        assert(interpolateFine(candidate.channels[0],second)>=interpolateFine(candidate.channels[0],second-1));
+    for (uint32_t second=3601; second<=7200; ++second)
+        assert(interpolateFine(candidate.channels[0],second)<=interpolateFine(candidate.channels[0],second-1));
+    assert(interpolateFine(candidate.channels[0],50000)==0);  // flat segment stays flat
     assert(gammaDuty(0)==0);
     assert(gammaDuty(1)==1);
     assert(gammaDuty(FINE_MAX)==PWM_RANGE);

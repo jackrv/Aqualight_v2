@@ -34,19 +34,6 @@ inline bool parseSchedule(JsonVariantConst root, Schedule& candidate) {
 }
 
 
-inline uint8_t interpolate(const Channel& ch, uint32_t second) {
-    for (uint8_t i = 1; i < ch.count; ++i) {
-        const Point& a = ch.points[i - 1];
-        const Point& b = ch.points[i];
-        if (second <= uint32_t(b.t) * 60) {
-            int32_t value = int32_t(a.v) + (int32_t(b.v) - a.v) *
-                int32_t(second - a.t * 60UL) / int32_t((b.t - a.t) * 60UL);
-            return static_cast<uint8_t>(value);
-        }
-    }
-    return 0;
-}
-
 // Direction of the segment that follows `second`: +1 rising, -1 falling, 0 steady.
 inline int8_t trend(const Channel& ch, uint32_t second) {
     for (uint8_t i = 1; i < ch.count; ++i) {
@@ -64,17 +51,30 @@ constexpr uint16_t FINE_STEPS = 64;
 constexpr uint16_t FINE_MAX = 255 * FINE_STEPS;
 constexpr uint16_t PWM_RANGE = 1023;
 
+// Cosine ease-in-out: a transition starts and ends with zero speed, so the
+// brightness has no corners at the schedule points. The web editor draws the
+// same curve (web/schedule.js).
+inline float easeInOut(float progress) {
+    return (1.0f - cosf(progress * 3.14159265f)) * 0.5f;
+}
+
 inline uint16_t interpolateFine(const Channel& ch, uint32_t second) {
     for (uint8_t i = 1; i < ch.count; ++i) {
         const Point& a = ch.points[i - 1];
         const Point& b = ch.points[i];
         if (second <= uint32_t(b.t) * 60) {
-            int32_t value = int32_t(a.v) * FINE_STEPS + (int32_t(b.v) - a.v) * FINE_STEPS *
-                int32_t(second - a.t * 60UL) / int32_t((b.t - a.t) * 60UL);
-            return static_cast<uint16_t>(value);
+            if (a.v == b.v) return uint16_t(a.v) * FINE_STEPS;
+            float progress = float(second - a.t * 60UL) / float((b.t - a.t) * 60UL);
+            float value = (a.v + (int(b.v) - int(a.v)) * easeInOut(progress)) * FINE_STEPS;
+            return static_cast<uint16_t>(value + 0.5f);
         }
     }
     return 0;
+}
+
+// The same level in schedule units 0…255.
+inline uint8_t interpolate(const Channel& ch, uint32_t second) {
+    return static_cast<uint8_t>((interpolateFine(ch, second) + FINE_STEPS / 2) / FINE_STEPS);
 }
 
 // Perceived brightness -> PWM duty (gamma 2.2). Anything above zero stays lit.
